@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Sora } from "next/font/google";
 import { SiteFooter } from "@/components/site/footer";
+import { EnquiryFab } from "@/components/site/enquiry-fab";
 import { SiteNav } from "@/components/site/nav";
 import { studio } from "@/content/studio";
 import "./globals.css";
@@ -76,6 +77,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="relative z-10">
           <SiteFooter />
         </div>
+        <EnquiryFab />
       </body>
     </html>
   );

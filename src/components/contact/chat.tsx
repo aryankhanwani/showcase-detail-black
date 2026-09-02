@@ -1,10 +1,11 @@
 "use client";
 
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { segments, serviceBySlug, studio } from "@/content/studio";
 import { cn } from "@/lib/cn";
 import type { ChatMessage, EnquiryResult, EnquiryValues } from "./types";
+import { useWordReveal } from "./use-word-reveal";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -21,9 +22,12 @@ const nextId = () => `local-${++localId}`;
 export function Chat({
   values,
   result,
+  compact = false,
 }: {
   values: EnquiryValues;
   result: EnquiryResult;
+  /** Shorter transcript, for the floating panel where the viewport is shared. */
+  compact?: boolean;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(
     result.opening
@@ -37,7 +41,10 @@ export function Chat({
      assistant is replying without knowing which thread it is in. */
   const [awaitingChoice, setAwaitingChoice] = useState(result.isReturning);
 
+  const reduced = useReducedMotion();
   const scrollRef = useRef<HTMLDivElement>(null);
+  /* Which bubble the reveal is currently writing into. */
+  const activeId = useRef<string | null>(null);
   const started = useRef(false);
 
   const scrollToEnd = useCallback(() => {
@@ -47,14 +54,39 @@ export function Chat({
 
   useEffect(scrollToEnd, [messages, scrollToEnd]);
 
-  /** Streams one assistant turn into a placeholder message. */
+  const reveal = useWordReveal({
+    enabled: !reduced,
+    onReveal: (text) => {
+      const id = activeId.current;
+      if (!id) return;
+      setMessages((m) => m.map((msg) => (msg.id === id ? { ...msg, content: text } : msg)));
+    },
+    onSettled: () => {
+      const id = activeId.current;
+      if (id) {
+        setMessages((m) =>
+          m.map((msg) => (msg.id === id ? { ...msg, streaming: false } : msg)),
+        );
+      }
+      activeId.current = null;
+      setBusy(false);
+    },
+  });
+
+  /**
+   * Streams one assistant turn.
+   *
+   * `busy` stays true until the *reveal* settles, not until the network
+   * finishes — otherwise the composer unlocks while the assistant is visibly
+   * still writing, and a fast typist can interleave two turns.
+   */
   const stream = useCallback(
     async (payload: Record<string, unknown>) => {
       setBusy(true);
       setError(null);
+      reveal.begin();
 
-      const id = nextId();
-      setMessages((m) => [...m, { id, role: "ASSISTANT", content: "", streaming: true }]);
+      let id: string | null = null;
 
       try {
         const res = await fetch("/api/chat", {
@@ -75,23 +107,34 @@ export function Chat({
           const { done, value } = await reader.read();
           if (done) break;
           const chunk = decoder.decode(value, { stream: true });
-          setMessages((m) =>
-            m.map((msg) => (msg.id === id ? { ...msg, content: msg.content + chunk } : msg)),
-          );
+          if (!chunk) continue;
+
+          /* The bubble is created by the first token rather than up front, so
+             the typing indicator covers the whole round trip instead of an
+             empty bubble sitting there with a caret in it. */
+          if (!id) {
+            id = nextId();
+            activeId.current = id;
+            setMessages((m) => [
+              ...m,
+              { id: id as string, role: "ASSISTANT", content: "", streaming: true },
+            ]);
+          }
+
+          reveal.push(chunk);
         }
 
-        setMessages((m) =>
-          m.map((msg) => (msg.id === id ? { ...msg, streaming: false } : msg)),
-        );
+        if (!id) throw new Error("The assistant did not reply. Please try again.");
+        reveal.seal();
       } catch (e) {
-        /* Drop the empty placeholder rather than leaving a blank bubble. */
-        setMessages((m) => m.filter((msg) => msg.id !== id));
+        reveal.cancel();
+        if (id) setMessages((m) => m.filter((msg) => msg.id !== id));
+        activeId.current = null;
         setError(e instanceof Error ? e.message : "Something went wrong.");
-      } finally {
         setBusy(false);
       }
     },
-    [result.conversationId],
+    [result.conversationId, reveal],
   );
 
   /* A new customer gets the assistant's opening immediately. A returning one
@@ -157,7 +200,7 @@ export function Chat({
   const segment = segments.find((s) => s.id === values.segment);
 
   return (
-    <div className="flex h-[min(72vh,640px)] flex-col">
+    <div className={cn("flex flex-col", compact ? "h-[min(62vh,520px)]" : "h-[min(72vh,640px)]")}>
       {/* ── Context strip ───────────────────────────────────────────────── */}
       <motion.div
         layout="position"
