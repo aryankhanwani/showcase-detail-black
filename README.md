@@ -111,6 +111,14 @@ Everything works over LAN including the video and the chat API. The session
 cookie is not `secure` in development, so it survives plain HTTP; in production
 it is secure-only, which is why this trick is dev-only.
 
+**Next 16 blocks cross-origin dev resources by default**, which breaks this in a
+confusing way: the HTML loads and the page renders, but `/_next/*` is refused,
+the client never boots, and everything stays frozen in Framer Motion's initial
+state — headline translated out of its mask, CTAs at `opacity: 0`. It reads as a
+broken layout, not a blocked request. `next.config.ts` handles it by allowing
+the machine's own LAN addresses, enumerated at startup so a new DHCP lease does
+not break it again.
+
 ---
 
 ## The two things worth reading the code for

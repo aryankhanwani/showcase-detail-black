@@ -1,6 +1,25 @@
+import os from "node:os";
 import type { NextConfig } from "next";
 
+/**
+ * Next 16 blocks cross-origin requests to dev resources (`/_next/*`) by
+ * default, so opening the dev server from a phone on the same WiFi serves the
+ * HTML but never boots the client. The page then renders stuck in Framer
+ * Motion's initial state — `translateY(108%)`, `opacity: 0` — which looks like
+ * a broken layout rather than a blocked request.
+ *
+ * Enumerating the machine's own LAN addresses rather than hardcoding one keeps
+ * this working when DHCP hands out a different IP tomorrow. Development only;
+ * `next start` and Vercel are unaffected.
+ */
+const lanOrigins = Object.values(os.networkInterfaces())
+  .flat()
+  .filter((iface) => iface && iface.family === "IPv4" && !iface.internal)
+  .map((iface) => iface!.address);
+
 const nextConfig: NextConfig = {
+  allowedDevOrigins: lanOrigins,
+
   /**
    * The chat route reads src/content/knowledge.md off disk at request time so
    * the studio's facts can be edited without a rebuild. Next's tracer cannot
