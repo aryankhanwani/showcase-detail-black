@@ -46,6 +46,61 @@ Without `DEEPSEEK_API_KEY` every page still works; only the chat returns a clear
 
 ---
 
+## Deploying
+
+Vercel works. Two things break a first attempt, and neither is obvious:
+
+**1. The Prisma client is generated code and is gitignored.** A clean checkout
+has nothing at `src/generated/prisma`, so the build dies on
+`Module not found: Can't resolve '@/generated/prisma/client'`. Fixed here by
+running `prisma generate` in both `build` and `postinstall` — don't "tidy" it
+away.
+
+**2. `DATABASE_URL` cannot point at local Docker.** The deployed app is not on
+your laptop's network, so `localhost:5433` is unreachable. You need a hosted
+Postgres.
+
+### Vercel + Neon (both free)
+
+```bash
+# 1. Create a Postgres at neon.tech, copy the POOLED connection string
+#    (the hostname contains `-pooler`).
+
+# 2. Push the schema to it, once, from your machine:
+DATABASE_URL="<neon-direct-url>" bun run db:push
+
+# 3. Deploy
+vercel
+
+# 4. Set env vars on the project (or paste them in the dashboard):
+vercel env add DATABASE_URL production      # the POOLED url
+vercel env add DEEPSEEK_API_KEY production
+vercel env add SESSION_SECRET production    # openssl rand -base64 32
+vercel --prod
+```
+
+Use the **pooled** URL for `DATABASE_URL` and the **direct** URL only for
+`db:push`. Every warm lambda keeps its own pool, so `src/lib/db.ts` drops to
+one connection each when `VERCEL` is set and lets Neon's pooler multiplex.
+
+`maxDuration = 60` on `/api/chat` matters: a streamed reply holds the
+connection open for the whole generation, and the 10s default would cut it off
+mid-sentence.
+
+### Anywhere with a real server
+
+Railway, Render or Fly are simpler if you would rather not think about
+connection pooling — they run the app as one long-lived process next to a
+Postgres, so the default pool of 10 is correct and nothing above applies except
+setting the three env vars.
+
+### On your phone, without deploying
+
+`bun run dev` already binds to your LAN. Open `http://<your-mac-ip>:3000` from
+a phone on the same WiFi — `ipconfig getifaddr en0` prints the address.
+
+---
+
 ## The two things worth reading the code for
 
 ### 1. The form becomes the chat

@@ -15,6 +15,14 @@ import { serviceBySlug } from "@/content/studio";
 /* Node runtime: the prompt builder reads knowledge.md off disk. */
 export const runtime = "nodejs";
 
+/*
+ * A serverless function's default ceiling is 10s, and a streamed reply holds
+ * the connection open for the whole generation. The stream would be cut
+ * mid-sentence on anything but the shortest answer, so this is raised to the
+ * Hobby-plan maximum. Ignored outside serverless.
+ */
+export const maxDuration = 60;
+
 /**
  * Streams a reply, then persists it.
  *

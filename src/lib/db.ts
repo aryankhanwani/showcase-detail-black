@@ -20,8 +20,26 @@ function createClient(): PrismaClient {
     );
   }
 
+  /*
+   * Pool sizing is the one thing that differs between a long-lived server and
+   * a serverless deployment. On Vercel every concurrent invocation is its own
+   * process with its own pool, so a default pool of 10 becomes 10 × however
+   * many lambdas are warm — which exhausts Postgres' connection limit long
+   * before the traffic justifies it. One connection per invocation is correct
+   * there, and the platform's own pooler does the multiplexing.
+   *
+   * Use the POOLED connection string on serverless (Neon's `-pooler` host, or
+   * Supabase's pgBouncer port 6543). The direct URL is for migrations only.
+   */
+  const serverless = Boolean(process.env.VERCEL);
+
   return new PrismaClient({
-    adapter: new PrismaPg({ connectionString }),
+    adapter: new PrismaPg({
+      connectionString,
+      max: serverless ? 1 : 10,
+      idleTimeoutMillis: serverless ? 10_000 : 30_000,
+      connectionTimeoutMillis: 10_000,
+    }),
     log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
   });
 }
