@@ -1,0 +1,116 @@
+// AURUM Detail Studio — enquiry and conversation store.
+//
+// The shape is driven by one product requirement: a returning visitor who has
+// enquired before must be recognised by phone *or* email, and offered their
+// earlier conversation back. That is why Customer is the root entity and is
+// deduplicated on both contact fields, rather than every form submission
+// creating an island.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// A person. Deduplicated on phone (always present) and email (optional).
+/// Both are unique so a second enquiry from either identifier resolves here.
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String   @unique
+  email     String?  @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enquiries     Enquiry[]
+  conversations Conversation[]
+
+  @@map("customers")
+}
+
+/// One submission of the contact form. Immutable once created — a returning
+/// customer gets a new Enquiry, and the conversation can span both.
+model Enquiry {
+  id         String  @id @default(cuid())
+  /// Human-facing reference shown to the customer, e.g. AUR-7Q2K4M.
+  ref        String  @unique
+  customerId String
+  segment    String
+  vehicle    String
+  service    String
+  message    String?
+  /// Path the enquiry came from, for attribution.
+  source     String?
+
+  status    EnquiryStatus @default(NEW)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  customer      Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@index([customerId, createdAt])
+  @@map("enquiries")
+}
+
+enum EnquiryStatus {
+  NEW
+  IN_CONVERSATION
+  QUOTED
+  CLOSED
+}
+
+/// A chat thread. Bound to the enquiry that opened it, and to the customer so
+/// history can be resumed across enquiries.
+model Conversation {
+  id         String @id @default(cuid())
+  customerId String
+  enquiryId  String
+
+  /// Set when a returning customer chose to carry on an earlier thread. It is
+  /// stored rather than inferred because "the previous conversation" stops
+  /// being unambiguous the moment a customer has three of them.
+  resumedFromId String?
+
+  status    ConversationStatus @default(ACTIVE)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  customer    Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  enquiry     Enquiry        @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  resumedFrom Conversation?  @relation("Resume", fields: [resumedFromId], references: [id], onDelete: SetNull)
+  resumedBy   Conversation[] @relation("Resume")
+  messages    Message[]
+
+  @@index([customerId, updatedAt])
+  @@map("conversations")
+}
+
+enum ConversationStatus {
+  ACTIVE
+  RESUMED
+  CLOSED
+}
+
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String      @db.Text
+  createdAt      DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}

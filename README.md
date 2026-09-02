@@ -1,36 +1,144 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AURUM Detail Studio
 
-## Getting Started
+A marketing site for a **fictional** car detailing studio in Ahmedabad, built as
+a showcase. The studio, its address, its pricing and its contact details are
+invented — the footer says so on every page.
 
-First, run the development server:
+Seven routes, a video hero, and a contact form that turns into a chat with an
+AI receptionist that already knows what you typed.
+
+---
+
+## Stack
+
+| Piece      | Choice                                                    |
+| ---------- | --------------------------------------------------------- |
+| Framework  | Next.js 16 (App Router, Turbopack), React 19              |
+| Styling    | Tailwind v4, tokens in `src/app/globals.css`              |
+| Motion     | Framer Motion (`motion`) — transform/opacity only         |
+| Database   | Postgres 16 in Docker, Prisma 7 with the `pg` adapter     |
+| AI         | DeepSeek (`deepseek-chat`) over its OpenAI-compatible API |
+| Validation | Zod                                                        |
+
+## Running it
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+docker compose up -d          # Postgres on :5433
+cp .env.example .env.local    # then fill in DEEPSEEK_API_KEY
+bun run db:push               # create the tables
+bun run dev                   # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`SESSION_SECRET` must be set — generate one with `openssl rand -base64 32`.
+Without `DEEPSEEK_API_KEY` every page still works; only the chat returns a clear
+"not configured" message.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Command               | Does                                     |
+| --------------------- | ---------------------------------------- |
+| `bun run dev`         | Dev server                               |
+| `bun run build`       | Production build                         |
+| `bun run db:up`       | Start Postgres                           |
+| `bun run db:push`     | Push the schema                          |
+| `bun run db:studio`   | Prisma Studio                            |
+| `bun run db:reset`    | Drop and recreate every table            |
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## The two things worth reading the code for
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 1. The form becomes the chat
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+`src/components/contact/` is one panel with two states.
 
-## Deploy on Vercel
+`ContactPanel` is a `layout` element, so its height animates between the form's
+and the chat's. The two states swap inside it with `AnimatePresence mode="wait"`
+— the form is fully gone before the chat measures, which is what stops the
+height jumping mid-crossfade. Children animate `layout="position"` rather than
+plain `layout`, because a layout animation that scales a box also scales the
+text inside it, and stretching text is exactly what reads as cheap.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+When the chat opens it already holds the enquiry. The chips along the top are
+the same values that went into the system prompt, so what the customer can see
+and what the model knows are the same data by construction — the assistant never
+asks for the car it was just told about.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### 2. Returning enquiries
+
+A customer is matched on **phone or email**, both normalised — `+91 98250 41200`
+and `9825041200` are the same person, which is the whole reason the feature
+fires at all.
+
+When there is a prior enquiry the conversation opens with a message written in
+`returningPrompt()` rather than generated, because "do you want to continue?"
+must be identical every time and must not be something the model can hallucinate
+around. The customer picks, and `/api/chat/resume` either links the new
+conversation to the old one (`resumedFromId`) and replays its transcript, or
+starts clean.
+
+Choosing "carry on" does **not** move the customer back into the old thread. The
+new enquiry stays the live record — so what they just filled in is never silently
+discarded — while the model still receives the full history.
+
+---
+
+## Security
+
+- **Conversation ids are not capabilities.** A cuid is not a secret, so the
+  browser carries an HMAC-signed, `httpOnly` cookie naming exactly which
+  conversations it may touch. Every chat route checks it, and the signature is
+  compared in constant time.
+- **Authorisation is checked before configuration**, so an unauthenticated
+  caller cannot learn whether an AI key is configured.
+- **The resume target comes from the cookie, never the request body** — you
+  cannot resume into someone else's thread by supplying its id.
+- `/api/enquiry` and `/api/chat` are rate limited per IP (in-process; on more
+  than one instance this wants a shared store).
+
+## The AI receptionist
+
+`src/content/knowledge.md` is the entire world the assistant is allowed to speak
+from — services, price bands, the studio's actual arguments, and the rules it
+cannot break (never quote a single price, never invent an offer, never promise a
+date, escalate complaints rather than defend). It is markdown on disk rather
+than a string constant so the studio's facts can be edited without touching
+TypeScript, and it is read once per server process.
+
+`src/content/studio.ts` holds the same facts as data for the UI. **When a price
+changes in one, change it in the other** — they are read by different audiences
+and must never disagree.
+
+---
+
+## Design
+
+One ground, tonal separation, and gold as punctuation.
+
+- **The page has one background.** `.ground` is rendered once in the layout —
+  a light anchored to the document (it scrolls away with the screen it lights)
+  and a grain anchored to the viewport (film sits on the lens, not the subject).
+  Sections never carry a fill; they separate by rhythm.
+- **Elevation is luminance, not shadow.** A dark drop shadow on a dark canvas is
+  invisible, so `surface-1/2/3` step the paper tint instead. A card is a surface
+  token and a radius — never a border.
+- **Gold is structural.** It marks the active state, the status dot, a section
+  rule, a reference chip. It is never a fill and never a gradient; the moment it
+  becomes one the site looks cheap.
+- **Type**: Sora for display (it keeps structure past 4rem, where a UI face goes
+  flat), Inter for body (most legible thing available at 16–17px on a mid-range
+  Android). Mono is a system stack — no webfont for thirty glyphs.
+- **Motion animates transform and opacity only**, everything is `once: true`,
+  and `prefers-reduced-motion` resolves to the *visible* state, never to hidden.
+
+## Media
+
+Every image is a frame pulled from the same body of studio footage, which is
+deliberate — six unrelated stock photographs read as six different businesses.
+Clips are from [Mixkit](https://mixkit.co) under its free licence (commercial
+use, no attribution required). Total media weight is ~1.6 MB; the hero is
+361 KB h264 / 168 KB vp9 at 720p, and is never loaded at all under reduced
+motion — the poster is the hero.
+
+Swap them by replacing files in `public/media/`; the paths are mapped in
+`src/content/media.ts`.

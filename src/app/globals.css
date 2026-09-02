@@ -1,26 +1,265 @@
 @import "tailwindcss";
 
+/*
+ * AURUM Detail Studio — surface.
+ *
+ * Two rules carry the whole system:
+ *
+ *   1. The page has ONE background. Sections never carry a fill of their own;
+ *      they separate by rhythm. Objects lift off that ground with a step in
+ *      surface luminance, never with a border and never with a gradient.
+ *   2. Gold is structural punctuation, not decoration. It appears on the active
+ *      state, the status dot, the rule under a live figure — and nowhere else.
+ *      The moment gold becomes a fill or a gradient, the site looks cheap.
+ */
+
+@theme {
+  /* ── Ground ─────────────────────────────────────────────────────────── */
+  --color-ink: #08080a;
+  --color-ink-2: #101013;
+  --color-ink-3: #17171b;
+
+  /* Warm off-white. Pure #fff on pure #000 reads as a terminal; this reads
+     as print, which is the register a ₹2,00,000 job has to sit in. */
+  --color-paper: #f2f1ed;
+  --color-paper-dim: #a9a8a3;
+  /* 5.0:1 on --color-ink. Small text (13px labels) needs 4.5:1 — do not darken. */
+  --color-paper-faint: #7e7d78;
+
+  /* AURUM. A brass, not a yellow: it has to survive next to warm paper without
+     either one looking dirty. Used on ~1% of the pixels, by design. */
+  --color-gold: #c9a227;
+  --color-gold-soft: #e3c46a;
+
+  --color-line: rgba(242, 241, 237, 0.07);
+  --color-line-strong: rgba(242, 241, 237, 0.16);
+
+  /* ── Radius ─────────────────────────────────────────────────────────── */
+  --radius-field: 10px;
+  --radius-card: 14px;
+  --radius-panel: 24px;
+  --radius-pill: 999px;
+
+  /* ── Type ───────────────────────────────────────────────────────────── */
+  --font-display: var(--font-sora), "SF Pro Display", system-ui, sans-serif;
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Roboto Mono", monospace;
+
+  /* ── Motion ─────────────────────────────────────────────────────────── */
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-standard: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* Height is animated here rather than in Framer Motion on purpose: a layout
+     animation on a six-row list reflows on every frame, and Radix already
+     measures the content for us. */
+  --animate-acc-down: acc-down 0.34s cubic-bezier(0.2, 0.7, 0.2, 1);
+  --animate-acc-up: acc-up 0.28s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@keyframes acc-down {
+  from { height: 0; opacity: 0; }
+  to   { height: var(--radix-accordion-content-height); opacity: 1; }
+}
+
+@keyframes acc-up {
+  from { height: var(--radix-accordion-content-height); opacity: 1; }
+  to   { height: 0; opacity: 0; }
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Elevation is luminance. A dark drop shadow on a dark canvas is invisible,
+     so depth reads as a step in surface brightness instead. */
+  --surface-1: rgba(242, 241, 237, 0.034);
+  --surface-2: rgba(242, 241, 237, 0.062);
+  --surface-3: rgba(242, 241, 237, 0.095);
+  --lift: 0 20px 50px -22px rgba(0, 0, 0, 0.8);
+  --recess: inset 0 0 40px rgba(0, 0, 0, 0.45);
+
+  /* One gutter value, site-wide. */
+  --edge: clamp(20px, 5vw, 72px);
+
+  color-scheme: dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+@layer base {
+  html {
+    background-color: var(--color-ink);
+    color-scheme: dark;
+    -webkit-tap-highlight-color: transparent;
+    scroll-behavior: smooth;
+  }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  body {
+    background-color: var(--color-ink);
+    color: var(--color-paper);
+    font-family: var(--font-sans);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+    /* A third of the site's copy is a bare <p>, so this is inherited rather
+       than applied per primitive. Headings opt out with text-balance. */
+    text-wrap: pretty;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    line-height: 1.05;
+    text-wrap: balance;
+  }
+
+  ::selection {
+    background-color: var(--color-gold);
+    color: var(--color-ink);
+  }
+
+  /* The focus ring is never removed — only ever restyled. */
+  :focus-visible {
+    outline: 2px solid var(--color-gold-soft);
+    outline-offset: 2px;
+  }
+
+  /* Firefox/Safari: keep the dark scrollbar from flashing white. */
+  * {
+    scrollbar-color: var(--color-line-strong) transparent;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ───────────────────────────────────────────────────────────────────────────
+   The ground — the site's only background.
+   Rendered once in app/layout.tsx, behind nav, main and footer.
+
+   Two layers, deliberately anchored differently:
+   · the light is a DOCUMENT object — it scrolls away with the screen it lights,
+     because a light fixed to the viewport stops reading as a light source and
+     becomes a permanent vignette.
+   · the grain is a SCREEN object — film sits on the lens, not on the subject.
+     A grain field that scrolls shears against the content moving past it, and
+     a 3% dither you can perceive moving has stopped doing its only job.
+   ─────────────────────────────────────────────────────────────────────────── */
+@layer components {
+  .ground {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(80% 48% at 50% -8%, rgba(242, 241, 237, 0.05), transparent 68%),
+      radial-gradient(40% 26% at 84% 4%, rgba(201, 162, 39, 0.035), transparent 72%);
+  }
+
+  .ground::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.032;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+}
+
+@layer utilities {
+  /* ── Layout ───────────────────────────────────────────────────────── */
+  .edge { padding-inline: var(--edge); }
+
+  /* ── Elevation ────────────────────────────────────────────────────── */
+  .surface-1 { background-color: var(--surface-1); }
+  .surface-2 { background-color: var(--surface-2); }
+  .surface-3 { background-color: var(--surface-3); }
+  .lift { box-shadow: var(--lift); }
+  .recess { box-shadow: var(--recess); }
+
+  /* ── Type scales ──────────────────────────────────────────────────── */
+  /* 600 where every other heading is 500: Sora's medium goes slack past 4rem
+     on a dark ground, and the hero is the one place this brand cannot look
+     tentative. It stops at 600 — 700 is the loud register the palette avoids. */
+  .t-display {
+    font-size: clamp(2.6rem, 7.2vw, 5.4rem);
+    font-weight: 600;
+    letter-spacing: -0.042em;
+    line-height: 0.96;
+  }
+  .t-display-c {
+    font-size: clamp(2.1rem, 4.9vw, 3.7rem);
+    font-weight: 600;
+    letter-spacing: -0.036em;
+    line-height: 1.03;
+  }
+  .t-section {
+    font-size: clamp(1.75rem, 4vw, 2.9rem);
+    font-weight: 500;
+    letter-spacing: -0.032em;
+    line-height: 1.06;
+  }
+  .t-lead {
+    font-size: clamp(1.05rem, 1.4vw, 1.28rem);
+    line-height: 1.6;
+  }
+  /* The signature label. Sentence-case 13px sans, not 11px uppercase mono —
+     an instrument-panel label costs real legibility on a mid-range phone. */
+  .t-label {
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.005em;
+    line-height: 1.45;
+  }
+  /* Survives only where the content is genuinely machine output: service codes,
+     indices, timestamps, price figures in a ledger. */
+  .t-mono {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .t-numeral {
+    font-family: var(--font-display);
+    font-size: clamp(2rem, 4.2vw, 3rem);
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    line-height: 1;
+  }
+
+  /* ── Masks ────────────────────────────────────────────────────────── */
+  /* A backdrop-blur erases the ground's grain, so a full-width blurred bar
+     always ends in a hard horizontal cut. The only fix is to stop it ending
+     on an edge — tint and blur fade out together over the last third. */
+  .mask-chrome {
+    -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
+  }
+  .mask-down {
+    -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 55%, transparent 100%);
+  }
+
+  /* ── Interaction ──────────────────────────────────────────────────── */
+  .press {
+    transition: transform 180ms var(--ease-standard);
+  }
+  .press:active {
+    transform: scale(0.975);
+  }
+
+  /* Hides content visually but keeps it for screen readers. */
+  .sr-only-focusable:not(:focus):not(:focus-within) {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
+/* Reduced motion must never mean invisible content — Framer Motion variants
+   read this via useReducedMotion and resolve to their visible state. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

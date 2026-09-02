@@ -1,0 +1,23 @@
+# Postgres for AURUM. Port 5433 on the host so it never collides with a local
+# Postgres or the detailblack stack already using 5432.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aurum-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aurum}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aurum}
+      POSTGRES_DB: ${POSTGRES_DB:-aurum}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - aurum_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aurum} -d ${POSTGRES_DB:-aurum}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  aurum_pgdata:
