@@ -96,8 +96,20 @@ setting the three env vars.
 
 ### On your phone, without deploying
 
-`bun run dev` already binds to your LAN. Open `http://<your-mac-ip>:3000` from
-a phone on the same WiFi — `ipconfig getifaddr en0` prints the address.
+`bun run dev` already binds to your LAN and prints the address:
+
+```
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.5:3000   <- open this on the phone
+```
+
+Use that Network line rather than guessing the interface — it is `en1` on this
+machine and `en0` on plenty of others, so `ipconfig getifaddr en0` often just
+returns nothing.
+
+Everything works over LAN including the video and the chat API. The session
+cookie is not `secure` in development, so it survives plain HTTP; in production
+it is secure-only, which is why this trick is dev-only.
 
 ---
 
