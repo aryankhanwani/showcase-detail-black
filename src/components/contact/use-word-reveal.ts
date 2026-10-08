@@ -1,28 +1,35 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { splitSegments, type Segment } from "@/lib/cards";
 
 /**
- * Reveals streamed text a word at a time.
+ * Reveals a streamed reply the way a person types it: word by word, and split
+ * across several messages rather than arriving as one block.
  *
- * DeepSeek delivers tokens in bursts — several words can land in a single
- * chunk, and then nothing for 200ms. Rendering chunks as they arrive therefore
- * looks like text being *pasted* in clumps, not typed. This buffers everything
- * received and releases it on its own clock, which is what makes it read as
- * writing.
+ * Three problems are being solved here.
  *
- * The cadence is adaptive rather than fixed. A fixed delay is fine for the
- * first sentence and then falls badly behind on a long reply — the network
- * finishes while the UI is still typing paragraph one, and the user waits on an
- * animation rather than on the model. So the further ahead the buffer gets, the
- * more words each tick releases: it catches up without ever dropping to an
- * instant dump.
+ * **Bursts.** DeepSeek delivers tokens in clumps — several words at once, then
+ * a pause. Rendering chunks as they arrive looks like text being *pasted*, not
+ * written. So everything received is buffered and released on our own clock.
+ *
+ * **Blocks.** A tidy five-line answer landing as a single bubble is the loudest
+ * "this is a bot" signal there is; people type in fragments and hit send early.
+ * The model is instructed to write short paragraphs, and each paragraph becomes
+ * its own message, a beat apart, with the typing indicator in between.
+ *
+ * **Cards.** A reply can contain a `::card` directive (see lib/cards.ts), which
+ * renders as a price panel or a calendar rather than as text. A card is not
+ * typed — nobody types a calendar — so it is released whole, after the same
+ * pause that separates two messages. It still waits its turn, so a card never
+ * appears above the sentence introducing it.
  */
 
-/* ~24 words/second at stride 1. Measured against live DeepSeek: 32ms read as
-   text being pasted rather than written, and anything past ~60ms leaves the
-   reader waiting on the animation after the model has already finished. */
 const TICK_MS = 42;
+
+/* The gap between two messages from the same reply — long enough to read as a
+   separate send, short enough that nobody wonders if it broke. */
+const PAUSE_MS = 820;
 
 /** Words released per tick, by how far the buffer is ahead (in characters). */
 function stride(backlog: number): number {
@@ -40,14 +47,29 @@ function nextWordEnd(text: string, from: number): number {
   return i;
 }
 
+/**
+ * The part of the buffer it is safe to parse yet.
+ *
+ * A directive is only a directive once its line is complete: mid-stream the
+ * buffer ends in `::ca`, which is not yet a card and must never be shown as
+ * text either. So while tokens are still arriving, a final unterminated line
+ * that has begun with a colon is held back — one line of latency, and the
+ * alternative is the customer watching `::card quo` type itself out.
+ */
+function visible(buffer: string, sealed: boolean): string {
+  if (sealed) return buffer;
+
+  const cut = buffer.lastIndexOf("\n");
+  const tail = buffer.slice(cut + 1);
+  return /^[ \t>*-]*:/.test(tail) ? buffer.slice(0, cut + 1) : buffer;
+}
+
+export type RevealSegment = Segment;
+
 export type WordReveal = {
-  /** Start a new reveal. Clears any previous buffer. */
   begin: () => void;
-  /** Feed a chunk as it arrives off the network. */
   push: (chunk: string) => void;
-  /** No more chunks are coming; finish once the buffer is drained. */
   seal: () => void;
-  /** Abandon the current reveal without settling (errors, unmount). */
   cancel: () => void;
 };
 
@@ -56,69 +78,125 @@ export function useWordReveal({
   onReveal,
   onSettled,
 }: {
-  /** False under prefers-reduced-motion: text appears as it arrives. */
+  /** False under prefers-reduced-motion: the whole reply appears at once. */
   enabled: boolean;
-  onReveal: (text: string) => void;
+  /** `segments` are the messages revealed so far; the last may be partial. */
+  onReveal: (segments: RevealSegment[], pausing: boolean) => void;
   onSettled: () => void;
 }): WordReveal {
   const buffer = useRef("");
-  const shown = useRef(0);
+  const segIndex = useRef(0);
+  const segCursor = useRef(0);
+  const pauseUntil = useRef(0);
   const sealed = useRef(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const alive = useRef(true);
 
-  /* Callbacks are read through refs so the ticker never needs to be torn down
-     and rebuilt when the parent re-renders mid-stream. */
   const revealRef = useRef(onReveal);
   const settledRef = useRef(onSettled);
   revealRef.current = onReveal;
   settledRef.current = onSettled;
-
-  /** True between mount and real unmount. See `ensureTicking`. */
-  const alive = useRef(true);
 
   const stop = useCallback(() => {
     if (timer.current) clearInterval(timer.current);
     timer.current = null;
   }, []);
 
+  const parsed = useCallback(
+    () => splitSegments(visible(buffer.current, sealed.current)),
+    [],
+  );
+
+  const emit = useCallback(
+    (pausing: boolean) => {
+      const segs = parsed();
+      const done = segs.slice(0, segIndex.current);
+      const current = segs[segIndex.current];
+
+      if (!current || segCursor.current === 0) {
+        revealRef.current(done, pausing);
+        return;
+      }
+
+      /* A card is whole or absent — there is no half-drawn calendar. */
+      if (current.kind === "card") {
+        revealRef.current([...done, current], pausing);
+        return;
+      }
+
+      revealRef.current(
+        [...done, { kind: "text", text: current.text.slice(0, segCursor.current) }],
+        pausing,
+      );
+    },
+    [parsed],
+  );
 
   const settle = useCallback(() => {
     stop();
-    revealRef.current(buffer.current);
+    const segs = parsed();
+    segIndex.current = segs.length;
+    segCursor.current = 0;
+    revealRef.current(segs, false);
     settledRef.current();
-  }, [stop]);
+  }, [parsed, stop]);
 
   const tick = useCallback(() => {
-    const full = buffer.current;
+    /* Holding between two messages. The caller draws typing dots meanwhile. */
+    if (Date.now() < pauseUntil.current) return;
 
-    if (shown.current >= full.length) {
+    const segs = parsed();
+    const current = segs[segIndex.current];
+
+    if (current === undefined) {
       if (sealed.current) settle();
       return;
     }
 
-    let next = shown.current;
-    const steps = stride(full.length - shown.current);
-    for (let i = 0; i < steps && next < full.length; i++) {
-      next = nextWordEnd(full, next);
+    /* Cards are not typed. One tick places the whole thing. */
+    if (current.kind === "card") {
+      if (segCursor.current === 0) {
+        segCursor.current = current.text.length;
+        emit(false);
+        return;
+      }
+    } else if (segCursor.current < current.text.length) {
+      let next = segCursor.current;
+      const steps = stride(current.text.length - segCursor.current);
+      for (let i = 0; i < steps && next < current.text.length; i++) {
+        next = nextWordEnd(current.text, next);
+      }
+      segCursor.current = next;
+      emit(false);
+      return;
     }
 
-    shown.current = next;
-    revealRef.current(full.slice(0, next));
+    /* This segment is fully written. Move on only once we know it is really
+       finished — either another segment exists behind it, or the stream is
+       sealed. Advancing early would split a paragraph mid-sentence the moment a
+       chunk boundary happened to land on a newline. */
+    const more = segIndex.current < segs.length - 1;
+    if (more) {
+      segIndex.current += 1;
+      segCursor.current = 0;
+      pauseUntil.current = Date.now() + PAUSE_MS;
+      emit(true);
+      return;
+    }
 
-    if (sealed.current && next >= full.length) settle();
-  }, [settle]);
+    if (sealed.current) settle();
+  }, [emit, parsed, settle]);
 
   /**
    * Starts the ticker if it should be running and is not.
    *
-   * This is called from every entry point rather than only from `begin`, and
-   * that is load-bearing: React StrictMode double-invokes effects on mount
-   * (run -> cleanup -> run), so the unmount cleanup below fires *once* in
-   * development at a moment when a reveal may already be in flight. That
-   * cleanup would clear the interval and leave `push` filling a buffer nothing
-   * was draining — an empty bubble with a blinking caret, forever. Re-arming on
-   * demand makes the ticker self-healing instead of relying on a lifecycle that
-   * is deliberately not linear in development.
+   * Called from every entry point, and that is load-bearing: React StrictMode
+   * double-invokes effects on mount (run -> cleanup -> run), so the unmount
+   * cleanup below fires once in development at a moment when a reveal may
+   * already be in flight. That cleanup cleared the interval and left `push`
+   * filling a buffer nothing was draining — an empty bubble with a blinking
+   * caret, forever. Re-arming on demand makes this self-healing instead of
+   * depending on a lifecycle that is deliberately not linear in development.
    */
   const ensureTicking = useCallback(() => {
     if (!enabled || !alive.current || timer.current) return;
@@ -128,7 +206,9 @@ export function useWordReveal({
   const begin = useCallback(() => {
     stop();
     buffer.current = "";
-    shown.current = 0;
+    segIndex.current = 0;
+    segCursor.current = 0;
+    pauseUntil.current = 0;
     sealed.current = false;
     ensureTicking();
   }, [ensureTicking, stop]);
@@ -138,10 +218,10 @@ export function useWordReveal({
       buffer.current += chunk;
       /* Reduced motion skips the clock entirely — the text is the content, and
          a motion preference must not put it behind an animation. */
-      if (!enabled) revealRef.current(buffer.current);
+      if (!enabled) revealRef.current(parsed(), false);
       else ensureTicking();
     },
-    [enabled, ensureTicking],
+    [enabled, ensureTicking, parsed],
   );
 
   const seal = useCallback(() => {
@@ -155,9 +235,6 @@ export function useWordReveal({
     sealed.current = false;
   }, [stop]);
 
-  /* A stream in flight when the panel closes would otherwise keep ticking
-     against an unmounted tree. `alive` gates re-arming so a late chunk cannot
-     resurrect the ticker after a genuine unmount. */
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -166,8 +243,5 @@ export function useWordReveal({
     };
   }, [stop]);
 
-  /* Memoised: a fresh object each render would invalidate the caller's
-     useCallback deps on every keystroke and rebuild the stream function
-     mid-generation. */
   return useMemo(() => ({ begin, push, seal, cancel }), [begin, push, seal, cancel]);
 }

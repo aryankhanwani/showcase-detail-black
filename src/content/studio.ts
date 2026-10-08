@@ -174,16 +174,61 @@ export function serviceBySlug(slug: string): Service | undefined {
   return services.find((s) => s.slug === slug);
 }
 
-/** Vehicle segments drive every price band. Used by the form and the chatbot. */
+/**
+ * Vehicle segments drive every price band. Used by the form and the chatbot.
+ *
+ * `factor` is where the segment sits inside a service's band — 0 is the
+ * hatchback that defines the low end, 1 is the luxury car that defines the
+ * high end. It exists so the chat can quote the band *for this customer's car*
+ * instead of the full ₹25,000–₹95,000 spread, which is technically true and
+ * practically useless to someone who drives a Creta.
+ */
 export const segments = [
-  { id: "hatchback", label: "Hatchback", example: "Swift, i20, Altroz" },
-  { id: "sedan", label: "Sedan", example: "City, Verna, Slavia" },
-  { id: "compact-suv", label: "Compact SUV", example: "Creta, Seltos, Nexon" },
-  { id: "full-suv", label: "Full-size SUV", example: "Fortuner, XUV700, Safari" },
-  { id: "luxury", label: "Luxury / Exotic", example: "BMW, Mercedes, Porsche" },
+  { id: "hatchback", label: "Hatchback", example: "Swift, i20, Altroz", factor: 0 },
+  { id: "sedan", label: "Sedan", example: "City, Verna, Slavia", factor: 0.22 },
+  { id: "compact-suv", label: "Compact SUV", example: "Creta, Seltos, Nexon", factor: 0.42 },
+  { id: "full-suv", label: "Full-size SUV", example: "Fortuner, XUV700, Safari", factor: 0.72 },
+  { id: "luxury", label: "Luxury / Exotic", example: "BMW, Mercedes, Porsche", factor: 1 },
 ] as const;
 
 export type SegmentId = (typeof segments)[number]["id"];
+
+export type Segment = (typeof segments)[number];
+
+export function segmentById(id: string): Segment | undefined {
+  return segments.find((s) => s.id === id);
+}
+
+/**
+ * The band for one service on one segment.
+ *
+ * Still a band, never a figure — the inspection is what produces a number, and
+ * that rule is brand, not caution. This only narrows the band to the part of it
+ * that can actually apply to the car in question: the segment's position in the
+ * full spread, plus a margin for condition and panel count.
+ *
+ * Rounded to ₹500 because a quote reading ₹38,417 claims a precision that no
+ * estimate made before seeing the paint actually has.
+ */
+export function segmentBand(
+  service: Service,
+  segmentId: string,
+): { from: number; to: number } {
+  const segment = segmentById(segmentId);
+  if (!segment) return { from: service.priceFrom, to: service.priceTo };
+
+  const spread = service.priceTo - service.priceFrom;
+  const centre = service.priceFrom + spread * segment.factor;
+  /* ±11% of the centre: wide enough to survive a bad bonnet, tight enough to
+     be worth reading. */
+  const margin = Math.max(centre * 0.11, spread * 0.04);
+
+  const round = (n: number) => Math.round(n / 500) * 500;
+  return {
+    from: Math.max(service.priceFrom, round(centre - margin)),
+    to: Math.min(service.priceTo, round(centre + margin)),
+  };
+}
 
 /**
  * The three packages the studio actually sells. Everything else is quoted
@@ -293,3 +338,39 @@ export const faqs = [
     a: "The film carries ten years and the coating carries five, both registered against your VIN. The finish itself is documented at handover with paint-depth readings and photographs under inspection light, so there is an objective record of what you received.",
   },
 ] as const;
+
+/**
+ * Booking rules.
+ *
+ * These are the studio's real constraints, not UI decoration: four bays, nine
+ * cars a week, Sundays by appointment only. The calendar in the chat refuses
+ * dates for exactly these reasons, which is what makes "the date we give you is
+ * a date we keep" true rather than a slogan.
+ */
+export const booking = {
+  /** Earliest drop-off, in days from today. The inspection has to be scheduled. */
+  leadDays: 2,
+  /** How far ahead the calendar opens. */
+  horizonDays: 60,
+  /** Cars taken in on one day. Four bays, but intake is staggered. */
+  perDay: 2,
+  /** The hard weekly ceiling the whole brand is built on. */
+  perWeek: 9,
+  /** Sunday. The studio is closed except by arrangement, so the grid says no. */
+  closedWeekday: 0,
+  /** Drop-off windows. One car per window per day — that is the whole lock. */
+  slots: [
+    { id: "0930", label: "9:30 AM", note: "First drop-off" },
+    { id: "1100", label: "11:00 AM", note: "Morning" },
+    { id: "1230", label: "12:30 PM", note: "Midday" },
+    { id: "1500", label: "3:00 PM", note: "Afternoon" },
+    { id: "1630", label: "4:30 PM", note: "Afternoon" },
+    { id: "1800", label: "6:00 PM", note: "Last drop-off" },
+  ],
+} as const;
+
+export type SlotId = (typeof booking.slots)[number]["id"];
+
+export function slotById(id: string) {
+  return booking.slots.find((s) => s.id === id);
+}

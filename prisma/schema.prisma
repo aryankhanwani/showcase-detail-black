@@ -28,6 +28,7 @@ model Customer {
 
   enquiries     Enquiry[]
   conversations Conversation[]
+  bookings      Booking[]
 
   @@map("customers")
 }
@@ -52,6 +53,7 @@ model Enquiry {
 
   customer      Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
   conversations Conversation[]
+  bookings      Booking[]
 
   @@index([customerId, createdAt])
   @@map("enquiries")
@@ -85,6 +87,7 @@ model Conversation {
   resumedFrom Conversation?  @relation("Resume", fields: [resumedFromId], references: [id], onDelete: SetNull)
   resumedBy   Conversation[] @relation("Resume")
   messages    Message[]
+  bookings    Booking[]
 
   @@index([customerId, updatedAt])
   @@map("conversations")
@@ -103,6 +106,15 @@ model Message {
   content        String      @db.Text
   createdAt      DateTime    @default(now())
 
+  /// Which surface the message was said on. One transcript spans both, so the
+  /// studio sees a single conversation rather than a web thread and a
+  /// WhatsApp thread that never meet.
+  channel MessageChannel @default(WEB)
+
+  /// Meta's message id. Unique because the Cloud API delivers webhooks
+  /// at-least-once — without this a retry replies to the customer twice.
+  externalId String? @unique
+
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId, createdAt])
@@ -113,4 +125,66 @@ enum MessageRole {
   USER
   ASSISTANT
   SYSTEM
+}
+
+enum MessageChannel {
+  WEB
+  WHATSAPP
+}
+
+/// A confirmed drop-off. Created the moment the customer picks a date and a
+/// window in the chat — this is the one thing on the site that is a commitment
+/// rather than an enquiry, which is why it carries its own reference and its
+/// own WhatsApp receipt.
+model Booking {
+  id             String  @id @default(cuid())
+  /// Shown to the customer and read out at the gate, e.g. AUR-7Q2K4M-B.
+  ref            String  @unique
+  customerId     String
+  enquiryId      String
+  conversationId String?
+
+  /// Drop-off day, stored as a plain calendar date. The studio's day is an IST
+  /// day; a timestamp would drift it by five and a half hours on a UTC host and
+  /// quietly move half the bookings to the day before.
+  date DateTime @db.Date
+  /// Drop-off window id from `booking.slots` in content/studio.ts.
+  slot String
+
+  /// Snapshotted from the enquiry so the run sheet still reads correctly after
+  /// a customer edits their next enquiry.
+  service String
+  segment String
+  vehicle String
+  notes   String?
+
+  status BookingStatus @default(CONFIRMED)
+
+  /// WhatsApp receipt. Recorded rather than assumed: a confirmation the studio
+  /// believes it sent and the customer never received is the worst outcome
+  /// here, so the failure is kept and shown.
+  notifiedAt  DateTime?
+  notifyError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customer     Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  enquiry      Enquiry       @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  /// One car per window. The database is where double-booking is actually
+  /// prevented — two customers can pass the same availability check a
+  /// millisecond apart, and only one can survive this index.
+  @@unique([date, slot])
+  @@index([date])
+  @@index([customerId, createdAt])
+  @@map("bookings")
+}
+
+enum BookingStatus {
+  CONFIRMED
+  RESCHEDULED
+  CANCELLED
+  COMPLETED
 }

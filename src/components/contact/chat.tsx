@@ -1,16 +1,35 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { segments, serviceBySlug, studio } from "@/content/studio";
+import { splitSegments } from "@/lib/cards";
 import { cn } from "@/lib/cn";
-import type { ChatMessage, EnquiryResult, EnquiryValues } from "./types";
+import { CardBlock, type CardContext } from "./cards";
+import type { BookingView, ChatMessage, EnquiryResult, EnquiryValues } from "./types";
 import { useWordReveal } from "./use-word-reveal";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
 let localId = 0;
 const nextId = () => `local-${++localId}`;
+
+/**
+ * One stored message, as the bubbles it is made of.
+ *
+ * A message held in the database is one row, but it can contain several
+ * paragraphs and a card directive — so the transcript that is *replayed* has to
+ * be split the same way the streamed one is, or a reloaded conversation shows
+ * `::card quote service=...` as literal text where a price panel used to be.
+ * Both paths go through `splitSegments`, which is the point of it.
+ */
+function expand(id: string, role: "USER" | "ASSISTANT", content: string): ChatMessage[] {
+  return splitSegments(content).map((segment, i) =>
+    segment.kind === "card"
+      ? { id: `${id}:${i}`, role, content: segment.text, card: segment.card }
+      : { id: `${id}:${i}`, role, content: segment.text },
+  );
+}
 
 /**
  * The chat that replaces the form.
@@ -30,9 +49,7 @@ export function Chat({
   compact?: boolean;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(
-    result.opening
-      ? [{ id: nextId(), role: "ASSISTANT", content: result.opening }]
-      : [],
+    result.opening ? expand(nextId(), "ASSISTANT", result.opening) : [],
   );
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,11 +57,16 @@ export function Chat({
   /* The resume question blocks free chat until it is answered — otherwise the
      assistant is replying without knowing which thread it is in. */
   const [awaitingChoice, setAwaitingChoice] = useState(result.isReturning);
+  /* Set the moment a drop-off is confirmed. Every calendar in the transcript
+     locks off this, so there is no way to book the same car twice by scrolling
+     up to an older card. */
+  const [booked, setBooked] = useState<BookingView | null>(null);
 
   const reduced = useReducedMotion();
   const scrollRef = useRef<HTMLDivElement>(null);
-  /* Which bubble the reveal is currently writing into. */
-  const activeId = useRef<string | null>(null);
+  /* Id prefix for the bubbles of the reply currently being written. One reply
+     can become several messages, so this names the group, not one bubble. */
+  const activeBase = useRef<string | null>(null);
   const started = useRef(false);
 
   const scrollToEnd = useCallback(() => {
@@ -56,19 +78,38 @@ export function Chat({
 
   const reveal = useWordReveal({
     enabled: !reduced,
-    onReveal: (text) => {
-      const id = activeId.current;
-      if (!id) return;
-      setMessages((m) => m.map((msg) => (msg.id === id ? { ...msg, content: text } : msg)));
+    /* Each paragraph of the reply is its own bubble. The group is rebuilt from
+       the segments every tick, which keeps this a pure function of the reveal
+       state — no incremental bookkeeping to drift out of sync. */
+    onReveal: (segments, pausing) => {
+      const base = activeBase.current;
+      if (!base) return;
+      setMessages((m) => [
+        ...m.filter((msg) => !msg.id.startsWith(`${base}:`)),
+        ...segments.map((segment, i) => ({
+          id: `${base}:${i}`,
+          role: "ASSISTANT" as const,
+          content: segment.text,
+          ...(segment.kind === "card" ? { card: segment.card } : {}),
+          /* Mid-pause nothing is being written, so the caret comes off and the
+             typing indicator takes over — which is what makes the gap read as
+             "sending the next one" rather than as a stall. A card is never
+             mid-write, so it never carries the caret. */
+          streaming:
+            segment.kind === "text" && i === segments.length - 1 && !pausing,
+        })),
+      ]);
     },
     onSettled: () => {
-      const id = activeId.current;
-      if (id) {
+      const base = activeBase.current;
+      if (base) {
         setMessages((m) =>
-          m.map((msg) => (msg.id === id ? { ...msg, streaming: false } : msg)),
+          m.map((msg) =>
+            msg.id.startsWith(`${base}:`) ? { ...msg, streaming: false } : msg,
+          ),
         );
       }
-      activeId.current = null;
+      activeBase.current = null;
       setBusy(false);
     },
   });
@@ -86,7 +127,7 @@ export function Chat({
       setError(null);
       reveal.begin();
 
-      let id: string | null = null;
+      let base: string | null = null;
 
       try {
         const res = await fetch("/api/chat", {
@@ -109,27 +150,23 @@ export function Chat({
           const chunk = decoder.decode(value, { stream: true });
           if (!chunk) continue;
 
-          /* The bubble is created by the first token rather than up front, so
-             the typing indicator covers the whole round trip instead of an
-             empty bubble sitting there with a caret in it. */
-          if (!id) {
-            id = nextId();
-            activeId.current = id;
-            setMessages((m) => [
-              ...m,
-              { id: id as string, role: "ASSISTANT", content: "", streaming: true },
-            ]);
+          /* Bubbles are created by the reveal, not up front, so the typing
+             indicator covers the whole round trip rather than an empty bubble
+             sitting there with a caret in it. */
+          if (!base) {
+            base = nextId();
+            activeBase.current = base;
           }
 
           reveal.push(chunk);
         }
 
-        if (!id) throw new Error("The assistant did not reply. Please try again.");
+        if (!base) throw new Error("The assistant did not reply. Please try again.");
         reveal.seal();
       } catch (e) {
         reveal.cancel();
-        if (id) setMessages((m) => m.filter((msg) => msg.id !== id));
-        activeId.current = null;
+        if (base) setMessages((m) => m.filter((msg) => !msg.id.startsWith(`${base}:`)));
+        activeBase.current = null;
         setError(e instanceof Error ? e.message : "Something went wrong.");
         setBusy(false);
       }
@@ -169,12 +206,9 @@ export function Chat({
               ? `Carry on with ${result.previous?.ref ?? "my earlier enquiry"}.`
               : "Start fresh with this new enquiry.",
         },
-        ...(data.transcript ?? []).map(
-          (msg: { id: string; role: "USER" | "ASSISTANT"; content: string }) => ({
-            id: `prior-${msg.id}`,
-            role: msg.role,
-            content: msg.content,
-          }),
+        ...(data.transcript ?? []).flatMap(
+          (msg: { id: string; role: "USER" | "ASSISTANT"; content: string }) =>
+            expand(`prior-${msg.id}`, msg.role, msg.content),
         ),
       ]);
 
@@ -185,6 +219,37 @@ export function Chat({
       setAwaitingChoice(true);
     }
   }
+
+  /**
+   * A drop-off has just been confirmed.
+   *
+   * The confirmation text comes from the server, not from the model — see
+   * api/booking/route.ts. It is appended here exactly as it was stored, so the
+   * bubble the customer reads and the line the assistant sees on its next turn
+   * are the same string.
+   */
+  const onBooked = useCallback((view: BookingView, message: string) => {
+    setBooked(view);
+    setMessages((m) => [...m, ...expand(nextId(), "ASSISTANT", message)]);
+  }, []);
+
+  /* The last card in the transcript — the only one still worth tapping. */
+  const lastCardIndex = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.card) return i;
+    }
+    return -1;
+  }, [messages]);
+
+  const cardContext = useMemo<CardContext>(
+    () => ({
+      conversationId: result.conversationId,
+      segment: values.segment,
+      booked,
+      onBooked,
+    }),
+    [booked, onBooked, result.conversationId, values.segment],
+  );
 
   async function send(event: React.FormEvent) {
     event.preventDefault();
@@ -228,8 +293,18 @@ export function Chat({
         aria-label="Conversation with the studio assistant"
       >
         <AnimatePresence initial={false}>
-          {messages.map((msg) => (
-            <Bubble key={msg.id} message={msg} />
+          {messages.map((msg, i) => (
+            <Bubble
+              key={msg.id}
+              message={msg}
+              context={cardContext}
+              /* Only the newest card is actionable — an older calendar would
+                 book against a date the conversation has moved past. It is the
+                 newest *card*, not the newest message: the assistant usually
+                 says one more line after placing a calendar, and that line must
+                 not switch off the calendar it just introduced. */
+              live={i === lastCardIndex}
+            />
           ))}
         </AnimatePresence>
 
@@ -317,8 +392,27 @@ export function Chat({
 
 /* ── Parts ──────────────────────────────────────────────────────────────── */
 
-function Bubble({ message }: { message: ChatMessage }) {
+function Bubble({
+  message,
+  context,
+  live,
+}: {
+  message: ChatMessage;
+  context: CardContext;
+  live: boolean;
+}) {
   const mine = message.role === "USER";
+
+  /* A card is not a bubble. It gets the full width of the transcript, because
+     a calendar squeezed into 85% with a tightened corner is a calendar nobody
+     can tap accurately on a phone. */
+  if (message.card) {
+    return (
+      <motion.div layout="position" className="flex justify-start">
+        <CardBlock card={message.card} live={live} context={context} />
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div

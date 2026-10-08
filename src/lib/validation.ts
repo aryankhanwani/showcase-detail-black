@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { segments, services } from "@/content/studio";
+import { booking, segments, services } from "@/content/studio";
+import { isValidYmd } from "@/lib/calendar";
 
 /**
  * The phone number is the identity key for returning enquiries, so it is
@@ -58,4 +59,33 @@ export const chatMessageSchema = z
 export const resumeSchema = z.object({
   conversationId: z.string().min(1),
   choice: z.enum(["continue", "new"]),
+});
+
+/**
+ * A booking request. The date is a plain calendar day in the studio's
+ * timezone and the slot is an id from `booking.slots` — never a free-text
+ * time, so there is no way to be booked in at 3am.
+ */
+export const bookingSchema = z.object({
+  conversationId: z.string().min(1),
+  date: z
+    .string()
+    .trim()
+    .refine((v) => isValidYmd(v), "Pick a date from the calendar."),
+  slot: z.enum(booking.slots.map((s) => s.id) as [string, ...string[]], {
+    message: "Pick a drop-off window.",
+  }),
+});
+
+export const availabilitySchema = z.object({
+  month: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+    .optional(),
+  date: z
+    .string()
+    .trim()
+    .refine((v) => isValidYmd(v))
+    .optional(),
 });

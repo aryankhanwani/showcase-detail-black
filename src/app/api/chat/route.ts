@@ -7,6 +7,7 @@ import {
   isConfigured,
   type PriorContext,
 } from "@/lib/deepseek";
+import { upcomingBookings } from "@/lib/booking";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
 import { authorizeConversation } from "@/lib/session";
 import { chatMessageSchema } from "@/lib/validation";
@@ -109,6 +110,7 @@ export async function POST(req: Request) {
   }
 
   const system = await buildSystemPrompt({
+    bookings: await upcomingBookings(conversation.customerId),
     enquiry: {
       ref: conversation.enquiry.ref,
       name: conversation.customer.name,
